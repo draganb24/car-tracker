@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-1
+      author: dragan
+      comment: Core listing table — idempotent by external_id
+      changes:
+        - createTable:
+            tableName: listing
+            columns:
+              - column: { name: id, type: bigint, autoIncrement: true, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: external_id, type: varchar(64), constraints: { nullable: false, unique: true } }
+              - column: { name: source, type: varchar(32), constraints: { nullable: false } }
+              - column: { name: title, type: varchar(512), constraints: { nullable: false } }
+              - column: { name: brand, type: varchar(128) }
+              - column: { name: model, type: varchar(128) }
+              - column: { name: price, type: numeric(12,2) }
+              - column: { name: currency, type: varchar(8) }
+              - column: { name: year, type: int }
+              - column: { name: mileage_km, type: int }
+              - column: { name: fuel_type, type: varchar(32) }
+              - column: { name: location, type: varchar(128) }
+              - column: { name: url, type: varchar(1024) }
+              - column: { name: first_seen_at, type: timestamptz }
+              - column: { name: last_seen_at, type: timestamptz }
+              - column: { name: active, type: boolean, defaultValueBoolean: true }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: "now()" }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: "now()" }
+        - createIndex:
+            tableName: listing
+            indexName: idx_listing_model_year
+            columns: [ model, year ]
+
+  - changeSet:
+      id: 0001-2
+      author: dragan
+      comment: Price history — append-only, never overwrites current price
+      changes:
+        - createTable:
+            tableName: price_history
+            columns:
+              - column: { name: id, type: bigint, autoIncrement: true, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: listing_id, type: bigint, constraints: { nullable: false } }
+              - column: { name: price, type: numeric(12,2), constraints: { nullable: false } }
+              - column: { name: currency, type: varchar(8) }
+              - column: { name: recorded_at, type: timestamptz, defaultValueComputed: "now()" }
+        - addForeignKeyConstraint:
+            baseColumnNames: listing_id
+            baseTableName: price_history
+            constraintName: fk_price_history_listing
+            referencedColumnNames: id
+            referencedTableName: listing
+            onDelete: CASCADE

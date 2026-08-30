@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: auto-tracker-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-auto_tracker}
+      POSTGRES_USER: ${DB_USER:-auto_tracker}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-auto_tracker}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - auto-tracker-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-auto_tracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: auto-tracker-mail
+    ports:
+      - "${MAIL_PORT:-1025}:1025"   # SMTP (app connects here)
+      - "8025:8025"                  # Web UI -> http://localhost:8025
+
+volumes:
+  auto-tracker-pg:
