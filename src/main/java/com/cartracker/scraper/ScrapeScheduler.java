@@ -1,7 +1,9 @@
 package com.cartracker.scraper;
 
+import com.cartracker.scraper.dto.response.ScrapeSummaryResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -12,26 +14,27 @@ import org.springframework.stereotype.Component;
 @Component
 public class ScrapeScheduler {
 
-    private static final Logger log = LoggerFactory.getLogger(ScrapeScheduler.class);
+  private static final Logger log = LoggerFactory.getLogger(ScrapeScheduler.class);
 
-    private final ScraperService scraperService;
-    private final String cron;
+  private final ScraperService scraperService;
+  private final String cron;
 
-    public ScrapeScheduler(ScraperService scraperService,
-                           @org.springframework.beans.factory.annotation.Value("${app.scraping.cron:0 0 */2 * * *}") String cron) {
-        this.scraperService = scraperService;
-        this.cron = cron;
-        log.info("ScrapeScheduler initialized with cron='{}'", cron);
+
+  public ScrapeScheduler(ScraperService scraperService,
+                         @Value("${app.scraping.cron:0 0 */2 * * *}") String cron) {
+    this.scraperService = scraperService;
+    this.cron = cron;
+    log.info("ScrapeScheduler initialized with cron='{}'", cron);
+  }
+
+  @Scheduled(cron = "${app.scraping.cron:0 0 */2 * * *}")
+  public void scheduledScrape() {
+    try {
+      log.info("Scheduled scrape starting (cron='{}')", cron);
+      ScrapeSummaryResponse s = scraperService.runScrape();
+      log.info("Scheduled scrape done: {}", s);
+    } catch (Exception e) {
+      log.error("Scheduled scrape failed: {}", e.getMessage(), e);
     }
-
-    @Scheduled(cron = "${app.scraping.cron:0 0 */2 * * *}")
-    public void scheduledScrape() {
-        try {
-            log.info("Scheduled scrape starting (cron='{}')", cron);
-            ScraperService.ScrapeSummary s = scraperService.runScrape();
-            log.info("Scheduled scrape done: {}", s);
-        } catch (Exception e) {
-            log.error("Scheduled scrape failed: {}", e.getMessage(), e);
-        }
-    }
+  }
 }

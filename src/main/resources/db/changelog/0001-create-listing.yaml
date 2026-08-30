@@ -1,16 +1,23 @@
 databaseChangeLog:
   - changeSet:
       id: 0001-1
-      author: dragan
-      comment: Core listing table — idempotent by external_id
+      author: dragan.bjelica
+      comment: Core listing table (sequence-backed int id) + price history — idempotent by external_id
       changes:
+        - createSequence:
+            sequenceName: listing_id_seq
+            startValue: 1
+            incrementBy: 1
+        - createSequence:
+            sequenceName: price_history_id_seq
+            startValue: 1
+            incrementBy: 1
         - createTable:
             tableName: listing
             columns:
               - column:
                   name: id
-                  type: bigint
-                  autoIncrement: true
+                  type: int
                   constraints:
                     primaryKey: true
                     nullable: false
@@ -64,7 +71,7 @@ databaseChangeLog:
                   name: last_seen_at
                   type: timestamptz
               - column:
-                  name: active
+                  name: is_active
                   type: boolean
                   defaultValueBoolean: true
               - column:
@@ -86,7 +93,7 @@ databaseChangeLog:
 
   - changeSet:
       id: 0001-2
-      author: dragan
+      author: dragan.bjelica
       comment: Price history — append-only, never overwrites current price
       changes:
         - createTable:
@@ -94,14 +101,13 @@ databaseChangeLog:
             columns:
               - column:
                   name: id
-                  type: bigint
-                  autoIncrement: true
+                  type: int
                   constraints:
                     primaryKey: true
                     nullable: false
               - column:
                   name: listing_id
-                  type: bigint
+                  type: int
                   constraints:
                     nullable: false
               - column:

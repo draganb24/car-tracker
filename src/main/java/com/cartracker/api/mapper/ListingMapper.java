@@ -1,14 +1,13 @@
 package com.cartracker.api.mapper;
 
-import com.cartracker.api.dto.ListingDto;
-import com.cartracker.domain.Listing;
+import com.cartracker.api.dto.response.ListingResponse;
+import com.cartracker.entity.ListingEntity;
 import org.mapstruct.Mapper;
 import org.mapstruct.factory.Mappers;
 
 @Mapper
 public interface ListingMapper {
-
     ListingMapper INSTANCE = Mappers.getMapper(ListingMapper.class);
 
-    ListingDto toDto(Listing listing);
+    ListingResponse fromEntityToResponse(ListingEntity listing);
 }
