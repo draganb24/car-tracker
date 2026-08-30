@@ -32,10 +32,17 @@ spring:
 app:
   scraping:
     base-url: ${SCRAPE_BASE_URL:https://olx.ba/vozila}
+    category-id: ${SCRAPE_CATEGORY_ID:18}
     delay-ms: ${SCRAPE_DELAY_MS:2000}
-    cron: ${SCRAPE_CRON:0 0 */2 * * *}
+    max-pages: ${SCRAPE_MAX_PAGES:5}
+    cron: ${SCRAPE_CRON:0 0 0/2 * * ?}
   digest:
-    cron: ${DIGEST_CRON:0 7 * * *}
+    cron: ${DIGEST_CRON:0 7 * * * ?}
+  mail:
+    from: ${MAIL_FROM:auto-tracker@localhost}
+    to: ${MAIL_TO:auto-tracker@localhost}
   scoring:
     year-tolerance: ${SCORE_YEAR_TOLERANCE:2}
     underpriced-threshold-pct: ${SCORE_UNDERPRICED_PCT:10}
+  scrape:
+    cron: ${SCRAPE_CRON:0 0 0/2 * * ?}

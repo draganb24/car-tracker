@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0002-1
+      author: dragan.bjelica
+      comment: Digest watermark key/value table (survives restarts)
+      changes:
+        - createTable:
+            tableName: digest_state
+            columns:
+              - column:
+                  name: state_key
+                  type: varchar(64)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: state_value
+                  type: varchar(64)
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: "now()"

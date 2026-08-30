@@ -21,13 +21,13 @@ public class ScrapeScheduler {
 
 
   public ScrapeScheduler(ScraperService scraperService,
-                         @Value("${app.scraping.cron:0 0 */2 * * *}") String cron) {
+                         @Value("${app.scraping.cron:0 0 0/2 * * ?}") String cron) {
     this.scraperService = scraperService;
     this.cron = cron;
     log.info("ScrapeScheduler initialized with cron='{}'", cron);
   }
 
-  @Scheduled(cron = "${app.scraping.cron:0 0 */2 * * *}")
+  @Scheduled(cron = "${app.scraping.cron:0 0 0/2 * * ?}")
   public void scheduledScrape() {
     try {
       log.info("Scheduled scrape starting (cron='{}')", cron);

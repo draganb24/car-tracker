@@ -6,13 +6,16 @@ import com.cartracker.repository.ListingRepository;
 import com.cartracker.repository.PriceHistoryRepository;
 import com.cartracker.scraper.dto.response.ScrapeResponse;
 import com.cartracker.scraper.dto.response.ScrapeSummaryResponse;
+import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Turns parsed {@link ScrapeResponse}s into persisted {@link ListingEntity}s.
@@ -22,6 +25,7 @@ import java.util.List;
  * new {@link PriceHistoryEntity} row — current price lives on {@link ListingEntity#getPrice()}.
  */
 @Service
+@RequiredArgsConstructor
 public class ScraperService {
 
   private static final Logger log = LoggerFactory.getLogger(ScraperService.class);
@@ -31,17 +35,15 @@ public class ScraperService {
   private final PriceHistoryRepository priceHistoryRepository;
 
 
-  public ScraperService(OlxScraper scraper,
-                        ListingRepository listingRepository,
-                        PriceHistoryRepository priceHistoryRepository) {
-    this.scraper = scraper;
-    this.listingRepository = listingRepository;
-    this.priceHistoryRepository = priceHistoryRepository;
-  }
-
   @Transactional
-  public ScrapeSummaryResponse runScrape() throws Exception {
-    List<ScrapeResponse> results = scraper.fetchCars();
+  public ScrapeSummaryResponse runScrape() {
+    Set<String> knownIds = new HashSet<>(listingRepository.findAllExternalIds());
+    List<ScrapeResponse> results;
+    try {
+      results = scraper.fetchCars(knownIds);
+    } catch (Exception e) {
+      throw new RuntimeException("scrape failed: " + e.getMessage(), e);
+    }
     int inserted = 0;
     int updated = 0;
     int priceChanges = 0;
@@ -94,10 +96,17 @@ public class ScraperService {
     }
 
     log.info("Scrape complete: {} new, {} updated, {} price changes", inserted, updated, priceChanges);
-    return new ScrapeSummaryResponse(results.size(), inserted, updated, priceChanges, now);
+    return new ScrapeSummaryResponse(
+        results.size(),
+        inserted,
+        updated,
+        priceChanges,
+        now
+    );
   }
 
-  private ListingEntity newListing(ScrapeResponse r, Instant now) {
+  private ListingEntity newListing(ScrapeResponse r,
+                                   Instant now) {
     return ListingEntity.builder()
         .externalId(r.externalId())
         .source("olx.ba")

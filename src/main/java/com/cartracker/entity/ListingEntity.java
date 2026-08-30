@@ -9,6 +9,8 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "listing",
@@ -82,4 +84,8 @@ public class ListingEntity {
 
   @Column(name = "updated_at")
   private Instant updatedAt;
+
+  @OneToMany(mappedBy = "listing", fetch = FetchType.LAZY)
+  @OrderBy("recordedAt ASC")
+  private List<PriceHistoryEntity> priceHistory = new ArrayList<>();
 }
