@@ -16,5 +16,11 @@ target/
 # OS
 .DS_Store
 
+# Local no-admin Maven install (not committed; see .tools/mvn.sh)
+.tools/
+
+# Dev-only scraped page snapshots
+.dev/
+
 # Logs
 *.log
