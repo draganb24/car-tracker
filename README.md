@@ -311,4 +311,5 @@ car-tracker-capstone/
 - **Design one-pager:** [`DESIGN.md`](./DESIGN.md) — problem, 10x claim, non-goals, source confirmation
   (robots.txt / ToS), data model, API surface, concept mapping.
 - **Source check:** `references/olx-ba-source-check.md` — robots.txt + ToS findings and the exact category URL.
-- **Public repo:** *(link added in Phase 5 submission)*
+- **Public repo:** https://github.com/draganb24/car-tracker
+- **Overview / submission doc:** [`My 10x Solution - Dragan Bjelica.md`](./My%2010x%20Solution%20-%20Dragan%20Bjelica.md)
