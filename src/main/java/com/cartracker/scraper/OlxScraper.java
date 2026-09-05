@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -68,7 +67,7 @@ public class OlxScraper {
    * Fetch and parse car listings across up to {@code maxPages} search pages.
    * Detail fetches for new listings run in parallel with bounded concurrency.
    */
-  public List<ScrapeResponse> fetchCars(Set<String> knownExternalIds) throws IOException, InterruptedException {
+  public List<ScrapeResponse> fetchCars(Set<String> knownExternalIds) throws InterruptedException {
     Set<String> known = knownExternalIds == null ? new HashSet<>() : knownExternalIds;
     List<ScrapeResponse> out = new ArrayList<>();
     int pageNo = 1;
@@ -164,46 +163,17 @@ public class OlxScraper {
     }
   }
 
-  private ScrapeResponse buildResponse(String externalId, String title, BigDecimal price, JsonNode detail) {
+  private ScrapeResponse buildResponse(String externalId,
+                                       String title,
+                                       BigDecimal price,
+                                       JsonNode detail) {
     String brand = null;
     String model = null;
     Integer year = null;
     Integer mileageKm = null;
     String fuelType = null;
     String location = null;
-    String url = apiBase + "/artikal/" + externalId;
-
-    if (detail != null) {
-      JsonNode brandNode = detail.path("brand");
-      if (brandNode.isObject()) brand = brandNode.path("name").asText(null);
-      JsonNode modelNode = detail.path("model");
-      if (modelNode.isObject()) model = modelNode.path("name").asText(null);
-      JsonNode cities = detail.path("cities");
-      if (cities.isArray() && !cities.isEmpty()) location = cities.get(0).path("name").asText(null);
-      if (location == null) location = detail.path("location").asText(null);
-      if (detail.has("slug")) url = apiBase + "/artikal/" + detail.path("slug").asText(externalId);
-
-      for (JsonNode a : detail.path("attributes")) {
-        String code = a.path("attr_code").asText(null);
-        if (code == null) continue;
-        switch (code) {
-          case "godiste" -> {
-            if (a.path("value").isNumber()) year = a.path("value").asInt();
-          }
-          case "godina-prve-registracije" -> {
-            if (year == null) {
-              String v = a.path("value").asText(null);
-              year = parseYear(v);
-            }
-          }
-          case "kilometra-a", "kilometraza", "kilometara" -> {
-            if (a.path("value").isNumber()) mileageKm = a.path("value").asInt();
-            else mileageKm = parseKm(a.path("value").asText(null));
-          }
-          case "gorivo" -> fuelType = a.path("value").asText(null);
-        }
-      }
-    }
+    String url = listingUrl(externalId, detail);
 
     if (brand == null) brand = deriveBrand(title);
     if (model == null) model = ModelNormalizer.normalize(title);
@@ -212,7 +182,14 @@ public class OlxScraper {
     return new ScrapeResponse(
         externalId, title,
         brand == null ? null : brand.toUpperCase(),
-        model, price, "KM", year, mileageKm, fuelType, location, url
+        model,
+        price,
+        "KM",
+        year,
+        mileageKm,
+        fuelType,
+        location,
+        url
     );
   }
 
@@ -238,6 +215,10 @@ public class OlxScraper {
     } catch (Exception ex) {
       throw new RuntimeException("failed to parse JSON from " + url + ": " + ex.getMessage(), ex);
     }
+  }
+
+  private String listingUrl(String externalId, JsonNode detail) {
+    return apiBase + "/artikal/" + externalId;
   }
 
   private BigDecimal toPrice(JsonNode n) {
