@@ -3,7 +3,6 @@ package com.cartracker.api;
 import com.cartracker.api.dto.request.ListingQuery;
 import com.cartracker.api.dto.response.ListingDetailResponse;
 import com.cartracker.api.dto.response.ListingResponse;
-import com.cartracker.api.mapper.ListingMapper;
 import com.cartracker.api.service.ListingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,12 +20,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class ListingController {
 
   private final ListingService listingService;
-  private final ListingMapper mapper = ListingMapper.INSTANCE;
 
   @GetMapping
   public Page<ListingResponse> list(@Valid @ModelAttribute ListingQuery query,
                                     Pageable pageable) {
-    return listingService.search(query, pageable).map(mapper::fromEntityToResponse);
+    return listingService.searchList(listingService.search(
+            query,
+            pageable
+        )
+    );
   }
 
   @GetMapping("/{id}")
