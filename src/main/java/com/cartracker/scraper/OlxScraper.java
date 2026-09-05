@@ -19,26 +19,18 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Polite scraper for the olx.ba vehicles category (cars).
- * <p>
- * olx.ba is a client-rendered site whose category grid is capped at 60 server-
- * rendered cards and whose {@code ?page=N} is ignored by the SPA. The real,
- * paginated data source is the public JSON API the SPA itself uses:
- * <ul>
- *   <li>{@code GET /api/search?category_id=18&page=N&per_page=60} — discovery +
- *       pagination; each item has id, title, price (KM), status.</li>
- *   <li>{@code GET /api/listings/{id}} — full structured detail (brand, model,
- *       year, mileage, fuel, location) via its {@code attributes} array.</li>
- * </ul>
- * We paginate the search endpoint and enrich only listings we don't already
- * have (the caller passes the known external IDs), so re-scrapes stay cheap and
- * polite. {@link ModelNormalizer} turns the free-text title into a canonical
- * model for cohort scoring.
- * <p>
- * Politeness: single-threaded, configurable delay between requests, descriptive
- * User-Agent, and we only hit detail pages for genuinely new listings.
+ *
+ * <p>Search pages are fetched sequentially. Detail fetches for new listings are
+ * parallelized with bounded concurrency and a reduced per-request delay, while
+ * preserving rate limiting between search-page batches.
  */
 @Component
 public class OlxScraper {
@@ -55,19 +47,17 @@ public class OlxScraper {
 
   public OlxScraper(@Value("${app.scraping.base-url}") String baseUrl,
                     @Value("${app.scraping.category-id:18}") int categoryId,
-                    @Value("${app.scraping.delay-ms:2000}") int delayMillis,
+                    @Value("${app.scraping.delay-ms:500}") int delayMillis,
                     @Value("${app.scraping.max-pages:5}") int maxPages) {
-    // derive API host from the configured base url (default https://olx.ba/vozila)
     String host = baseUrl;
     int q = host.indexOf('?');
     if (q >= 0) host = host.substring(0, q);
     int slash = host.indexOf('/', 8);
     this.apiBase = (slash >= 0 ? host.substring(0, slash) : host).replaceAll("/+$", "");
     this.categoryId = categoryId;
-    this.delayMillis = Math.max(delayMillis, 500);
+    this.delayMillis = Math.max(delayMillis, 0);
     this.maxPages = Math.max(maxPages, 1);
     this.userAgent = "AutoTracker/0.1 (FlyRank capstone; +https://github.com/draganb24/car-tracker)";
-    // Bounded timeouts so a single slow/hanging listing can't stall the whole run.
     this.client = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build();
@@ -76,8 +66,7 @@ public class OlxScraper {
 
   /**
    * Fetch and parse car listings across up to {@code maxPages} search pages.
-   * Only listings whose external ID is NOT in {@code knownExternalIds} are
-   * enriched with detail data (year/mileage/fuel/location).
+   * Detail fetches for new listings run in parallel with bounded concurrency.
    */
   public List<ScrapeResponse> fetchCars(Set<String> knownExternalIds) throws IOException, InterruptedException {
     Set<String> known = knownExternalIds == null ? new HashSet<>() : knownExternalIds;
@@ -86,51 +75,80 @@ public class OlxScraper {
 
     if (delayMillis > 0) Thread.sleep(delayMillis);
 
-    while (pageNo <= maxPages) {
-      String url = apiBase + "/api/search?category_id=" + categoryId
-          + "&page=" + pageNo + "&per_page=60";
-      log.info("Scraping search page {}: {}", pageNo, url);
+    int parallelism = Math.max(2, Math.min(8, maxPages >= 5 ? 6 : maxPages * 2));
+    ExecutorService executor = Executors.newFixedThreadPool(parallelism);
+    int detailDelay = Math.max(200, delayMillis / 3);
 
-      JsonNode search;
-      try {
-        search = getJson(url);
-      } catch (RuntimeException ex) {
-        log.warn("Search page {} failed: {}", pageNo, ex.getMessage(), ex);
-        break;
-      }
+    try {
+      while (pageNo <= maxPages) {
+        String url = apiBase + "/api/search?category_id=" + categoryId
+            + "&page=" + pageNo + "&per_page=60";
+        log.info("Scraping search page {}: {}", pageNo, url);
 
-      JsonNode data = search.path("data");
-      if (!data.isArray() || data.isEmpty()) {
-        log.info("Search page {} returned no items; stopping.", pageNo);
-        break;
-      }
-
-      int added = 0;
-      for (JsonNode item : data) {
-        String externalId = item.path("id").asText(null);
-        if (externalId == null || externalId.isBlank()) continue;
-        if (known.contains(externalId)) continue; // already have it; skip detail call
-
-        String title = item.path("title").asText(null);
-        BigDecimal price = toPrice(item.path("price"));
-        if (title == null || price == null) continue;
-
-        // Enrich with detail (year/mileage/fuel/location/brand/model)
-        JsonNode detail = fetchDetail(externalId);
-        ScrapeResponse r = buildResponse(externalId, title, price, detail);
-        if (r != null) {
-          out.add(r);
-          added++;
+        JsonNode search;
+        try {
+          search = getJson(url);
+        } catch (RuntimeException ex) {
+          log.warn("Search page {} failed: {}", pageNo, ex.getMessage(), ex);
+          break;
         }
-        if (delayMillis > 0) Thread.sleep(delayMillis);
-      }
 
-      log.info("Page {} enriched {} new listings (total {})", pageNo, added, out.size());
-      if (added == 0) {
-        log.info("No new listings on page {}; stopping pagination.", pageNo);
-        break;
+        JsonNode data = search.path("data");
+        if (!data.isArray() || data.isEmpty()) {
+          log.info("Search page {} returned no items; stopping.", pageNo);
+          break;
+        }
+
+        List<CompletableFuture<ScrapeResponse>> futures = new ArrayList<>();
+        for (JsonNode item : data) {
+          String externalId = item.path("id").asText(null);
+          if (externalId == null || externalId.isBlank()) continue;
+          if (known.contains(externalId)) continue;
+
+          String title = item.path("title").asText(null);
+          BigDecimal price = toPrice(item.path("price"));
+          if (title == null || price == null) continue;
+
+          CompletableFuture<ScrapeResponse> cf = CompletableFuture.supplyAsync(() -> {
+            try {
+              if (detailDelay > 0) Thread.sleep(detailDelay);
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+            JsonNode detail = fetchDetail(externalId);
+            return buildResponse(externalId, title, price, detail);
+          }, executor);
+          futures.add(cf);
+        }
+
+        int added = 0;
+        for (CompletableFuture<ScrapeResponse> future : futures) {
+          try {
+            ScrapeResponse r = future.get(25, TimeUnit.SECONDS);
+            if (r != null) {
+              out.add(r);
+              added++;
+            }
+          } catch (TimeoutException e) {
+            log.warn("Detail fetch timeout on page {}", pageNo);
+          } catch (Exception e) {
+            log.warn("Detail fetch failed on page {}: {}", pageNo, e.getMessage());
+          }
+        }
+
+        log.info("Page {} enriched {} new listings (total {})", pageNo, added, out.size());
+        if (added == 0) {
+          log.info("No new listings on page {}; stopping pagination.", pageNo);
+          break;
+        }
+
+        pageNo++;
+        if (delayMillis > 0 && pageNo <= maxPages) {
+          Thread.sleep(detailDelay);
+        }
       }
-      pageNo++;
+    } finally {
+      executor.shutdownNow();
     }
 
     log.info("Parsed {} new automobile listings across {} page(s)", out.size(), Math.min(pageNo, maxPages));
@@ -169,9 +187,14 @@ public class OlxScraper {
         String code = a.path("attr_code").asText(null);
         if (code == null) continue;
         switch (code) {
-          case "godiste" -> { if (a.path("value").isNumber()) year = a.path("value").asInt(); }
+          case "godiste" -> {
+            if (a.path("value").isNumber()) year = a.path("value").asInt();
+          }
           case "godina-prve-registracije" -> {
-            if (year == null) { String v = a.path("value").asText(null); year = parseYear(v); }
+            if (year == null) {
+              String v = a.path("value").asText(null);
+              year = parseYear(v);
+            }
           }
           case "kilometra-a", "kilometraza", "kilometara" -> {
             if (a.path("value").isNumber()) mileageKm = a.path("value").asInt();
@@ -182,7 +205,6 @@ public class OlxScraper {
       }
     }
 
-    // Fallbacks from the title when detail is missing
     if (brand == null) brand = deriveBrand(title);
     if (model == null) model = ModelNormalizer.normalize(title);
     else model = ModelNormalizer.normalize(title);
@@ -209,12 +231,12 @@ public class OlxScraper {
       }
       return mapper.readTree(resp.body());
     } catch (java.io.IOException ex) {
-      throw new RuntimeException("request to " + url + " failed: " + ex.getMessage());
+      throw new RuntimeException("request to " + url + " failed: " + ex.getMessage(), ex);
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt();
-      throw new RuntimeException("request to " + url + " interrupted");
+      throw new RuntimeException("request to " + url + " interrupted", ex);
     } catch (Exception ex) {
-      throw new RuntimeException("failed to parse JSON from " + url + ": " + ex.getMessage());
+      throw new RuntimeException("failed to parse JSON from " + url + ": " + ex.getMessage(), ex);
     }
   }
 
