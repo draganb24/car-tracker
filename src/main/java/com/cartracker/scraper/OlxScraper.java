@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -98,15 +99,30 @@ public class OlxScraper {
           break;
         }
 
+        List<ScrapeResponse> base = new ArrayList<>();
         List<CompletableFuture<ScrapeResponse>> futures = new ArrayList<>();
         for (JsonNode item : data) {
           String externalId = item.path("id").asText(null);
           if (externalId == null || externalId.isBlank()) continue;
-          if (known.contains(externalId)) continue;
 
           String title = item.path("title").asText(null);
           BigDecimal price = toPrice(item.path("price"));
           if (title == null || price == null) continue;
+
+          SearchAttrs attrs = parseSearchAttrs(item);
+          base.add(ScrapeResponse.builder()
+              .externalId(externalId)
+              .title(title)
+              .brand(deriveBrand(title))
+              .model(ModelNormalizer.normalize(title))
+              .price(price)
+              .currency("KM")
+              .year(attrs.year())
+              .mileageKm(attrs.mileageKm())
+              .fuelType(attrs.fuelType())
+              .location(null)
+              .url(listingUrl(externalId, null))
+              .build());
 
           CompletableFuture<ScrapeResponse> cf = CompletableFuture.supplyAsync(() -> {
             try {
@@ -114,11 +130,13 @@ public class OlxScraper {
             } catch (InterruptedException e) {
               Thread.currentThread().interrupt();
             }
-            JsonNode detail = fetchDetail(externalId);
+            JsonNode detail = fetchDetail(externalId, detailDelay);
             return buildResponse(externalId, title, price, detail);
           }, executor);
           futures.add(cf);
         }
+
+        out.addAll(base);
 
         int added = 0;
         for (CompletableFuture<ScrapeResponse> future : futures) {
@@ -154,12 +172,22 @@ public class OlxScraper {
     return out;
   }
 
-  private JsonNode fetchDetail(String externalId) {
+  private JsonNode fetchDetail(String externalId, int detailDelay) {
     try {
       return getJson(apiBase + "/api/listings/" + externalId);
-    } catch (RuntimeException ex) {
-      log.warn("Detail fetch failed for {}: {}", externalId, ex.getMessage());
-      return null;
+    } catch (RuntimeException first) {
+      log.warn("Detail fetch failed for {}, retrying: {}", externalId, first.getMessage());
+      try {
+        if (detailDelay > 0) Thread.sleep(detailDelay);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      try {
+        return getJson(apiBase + "/api/listings/" + externalId);
+      } catch (RuntimeException retry) {
+        log.warn("Detail fetch retry failed for {}: {}", externalId, retry.getMessage());
+        return null;
+      }
     }
   }
 
@@ -173,24 +201,67 @@ public class OlxScraper {
     Integer mileageKm = null;
     String fuelType = null;
     String location = null;
-    String url = listingUrl(externalId, detail);
+
+    if (detail != null && !detail.isMissingNode()) {
+      if (log.isDebugEnabled()) log.debug("Detail for {}: {}", externalId, detail.toPrettyString());
+
+      JsonNode brandNode = detail.path("brand");
+      if (brandNode.isObject()) brand = brandNode.path("name").asText(null);
+      JsonNode modelNode = detail.path("model");
+      if (modelNode.isObject()) model = modelNode.path("name").asText(null);
+
+      JsonNode cities = detail.path("cities");
+      if (cities.isArray() && !cities.isEmpty()) location = cities.get(0).path("name").asText(null);
+      if (location == null) location = detail.path("location").asText(null);
+      if (location == null) location = extractLocationFromDescription(detail);
+
+      for (JsonNode a : detail.path("attributes")) {
+        String code = a.path("attr_code").asText(null);
+        if (code == null) continue;
+        switch (code) {
+          case "godiste" -> {
+            if (a.path("value").isNumber()) year = a.path("value").asInt();
+          }
+          case "godina-prve-registracije" -> {
+            if (year == null) {
+              String v = a.path("value").asText(null);
+              year = parseYear(v);
+            }
+          }
+          case "kilometra-a", "kilometraza", "kilometara" -> {
+            if (a.path("value").isNumber()) mileageKm = a.path("value").asInt();
+            else mileageKm = parseKm(a.path("value").asText(null));
+          }
+          case "gorivo" -> fuelType = a.path("value").asText(null);
+        }
+        if (log.isDebugEnabled())
+          log.debug("  attr_code='{}' value='{}'", code, a.path("value").toPrettyString());
+      }
+      if (log.isDebugEnabled())
+        log.debug("Parsed attributes for {}: year={}, mileage={}, fuel={}", externalId, year, mileageKm, fuelType);
+    }
 
     if (brand == null) brand = deriveBrand(title);
     if (model == null) model = ModelNormalizer.normalize(title);
-    else model = ModelNormalizer.normalize(title);
 
-    return new ScrapeResponse(
-        externalId, title,
-        brand == null ? null : brand.toUpperCase(),
-        model,
-        price,
-        "KM",
-        year,
-        mileageKm,
-        fuelType,
-        location,
-        url
+    String url = listingUrl(
+        externalId,
+        detail
     );
+
+    return ScrapeResponse.builder()
+        .externalId(externalId)
+        .title(title)
+        .brand(brand == null ? null : brand.toUpperCase())
+        .model(model)
+        .price(price)
+        .currency("KM")
+        .year(year)
+        .mileageKm(mileageKm)
+        .fuelType(fuelType)
+        .location(location)
+        .url(url)
+        .build();
   }
 
   private JsonNode getJson(String url) {
@@ -245,5 +316,83 @@ public class OlxScraper {
     if (raw == null) return null;
     String digits = raw.replaceAll("[^0-9]", "");
     return digits.isEmpty() ? null : Integer.parseInt(digits);
+  }
+
+  private record SearchAttrs(Integer year, Integer mileageKm, String fuelType) {
+  }
+
+  private SearchAttrs parseSearchAttrs(JsonNode item) {
+    Integer year = null;
+    Integer mileageKm = null;
+    String fuelType = null;
+
+    JsonNode labels = item.path("labels");
+    if (labels.isArray()) {
+      for (JsonNode label : labels) {
+        if (label.isTextual()) {
+          String v = label.asText(null);
+          if (v == null) continue;
+          String digits = v.replaceAll("[^0-9]", "");
+          if (digits.length() == 4) {
+            try {
+              year = Integer.parseInt(digits);
+            } catch (NumberFormatException ignored) {
+            }
+          } else if (!digits.isEmpty()) {
+            try {
+              mileageKm = Integer.parseInt(digits);
+            } catch (NumberFormatException ignored) {
+            }
+          }
+        } else if (label.isObject()) {
+          String labelText = label.path("label").asText(null);
+          String labelValue = label.path("value").asText(null);
+          if (labelText != null && labelText.toLowerCase(Locale.ROOT).contains("godište")) {
+            if (year == null) year = parseYear(labelValue);
+          } else if (labelText != null && labelText.toLowerCase(Locale.ROOT).contains("kilometraža")) {
+            if (mileageKm == null) mileageKm = parseKm(labelValue);
+          } else if (labelText != null && labelText.toLowerCase(Locale.ROOT).contains("gorivo")) {
+            fuelType = labelValue;
+          }
+        }
+      }
+    }
+
+    JsonNode special = item.path("special_labels");
+    if (special.isArray()) {
+      for (JsonNode spec : special) {
+        String label = spec.path("label").asText(null);
+        String value = spec.path("value").asText(null);
+        if (label == null || value == null) continue;
+        String code = label.toLowerCase(Locale.ROOT);
+        if (code.contains("godište") || code.contains("godina")) {
+          if (year == null) year = parseYear(value);
+        } else if (code.contains("kilometraža")) {
+          if (mileageKm == null) mileageKm = parseKm(value);
+        } else if (code.contains("gorivo")) {
+          fuelType = value;
+        }
+      }
+    }
+
+    if (log.isDebugEnabled() && (year != null || mileageKm != null || fuelType != null)) {
+      log.debug("Search attrs: year={}, mileage={}, fuel={}", year, mileageKm, fuelType);
+    }
+
+    return new SearchAttrs(year, mileageKm, fuelType);
+  }
+
+  private String extractLocationFromDescription(JsonNode detail) {
+    JsonNode desc = detail.path("additional").path("description");
+    if (!desc.isTextual()) return null;
+    String html = desc.asText(null);
+    if (html == null) return null;
+    java.util.regex.Pattern p = java.util.regex.Pattern.compile("<b>(GRAD\\s+[^<]+)</b>", java.util.regex.Pattern.CASE_INSENSITIVE);
+    java.util.regex.Matcher m = p.matcher(html);
+    if (m.find()) {
+      String match = m.group(1).toUpperCase(Locale.ROOT);
+      return match.replace("GRAD", "").trim().toUpperCase();
+    }
+    return null;
   }
 }

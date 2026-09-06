@@ -34,7 +34,6 @@ public class ScraperService {
   private final ListingRepository listingRepository;
   private final PriceHistoryRepository priceHistoryRepository;
 
-
   @Transactional
   public ScrapeSummaryResponse runScrape() {
     Set<String> knownIds = new HashSet<>(listingRepository.findAllExternalIds());
